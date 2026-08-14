@@ -89,7 +89,7 @@ fetch_project password /etc/pam.d/common-password
 if [[ -f "$SCRIPT_DIR/cf.sh" ]]; then
   install -m 0755 "$SCRIPT_DIR/cf.sh" /usr/local/bin/yanstunnel-cf
 else
-  yan_download "$REPO_RAW_CONFIG/cf.sh" /usr/local/bin/yanstunnel-cf
+  yan_download "$REPO_RAW_BASE/cf.sh" /usr/local/bin/yanstunnel-cf
   chmod 0755 /usr/local/bin/yanstunnel-cf
 fi
 
