@@ -1,0 +1,6 @@
+# YanTunnel VPS permission list
+# Format: Username : IP_VPS : masa_aktif_hari
+# Example:
+# DemoUser : 203.0.113.10 : 60
+#
+# Use a real public IPv4 address. Lines beginning with # are ignored.
