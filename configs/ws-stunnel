@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Small HTTP-header TCP bridge used by the SSH websocket service.
+
+The original version required Python 2, which is no longer available on
+Debian 12/13 and current Ubuntu releases. This implementation keeps the
+same headers and default target while using only the Python 3 standard
+library.
+"""
+
+import argparse
+import selectors
+import socket
+import threading
+
+BUFFER_SIZE = 16 * 1024
+DEFAULT_TARGET = ("127.0.0.1", 109)
+RESPONSE = (
+    b"HTTP/1.1 101 Switching Protocols\r\n"
+    b"Connection: Upgrade\r\n"
+    b"Content-Length: 0\r\n\r\n"
+)
+
+
+def header_value(payload: bytes, name: str) -> str:
+    for line in payload.split(b"\r\n"):
+        key, separator, value = line.partition(b":")
+        if separator and key.decode("latin1").strip().lower() == name.lower():
+            return value.decode("latin1").strip()
+    return ""
+
+
+def target_from_headers(payload: bytes) -> tuple[str, int]:
+    value = header_value(payload, "X-Real-Host") or "127.0.0.1:109"
+    host, separator, port = value.rpartition(":")
+    if not separator:
+        return value, DEFAULT_TARGET[1]
+    try:
+        return host or DEFAULT_TARGET[0], int(port)
+    except ValueError:
+        return DEFAULT_TARGET
+
+
+def relay(client: socket.socket, target: socket.socket) -> None:
+    selector = selectors.DefaultSelector()
+    client.setblocking(False)
+    target.setblocking(False)
+    selector.register(client, selectors.EVENT_READ, target)
+    selector.register(target, selectors.EVENT_READ, client)
+    try:
+        while True:
+            events = selector.select(timeout=60)
+            if not events:
+                break
+            for key, _ in events:
+                data = key.fileobj.recv(BUFFER_SIZE)
+                if not data:
+                    return
+                key.data.sendall(data)
+    finally:
+        selector.close()
+
+
+def handle(client: socket.socket, address: tuple[str, int], password: str) -> None:
+    target = None
+    try:
+        client.settimeout(15)
+        payload = client.recv(BUFFER_SIZE)
+        if not payload:
+            return
+        if password and header_value(payload, "X-Pass") != password:
+            return
+        if header_value(payload, "X-Split"):
+            client.recv(BUFFER_SIZE)
+        host, port = target_from_headers(payload)
+        target = socket.create_connection((host, port), timeout=15)
+        client.sendall(RESPONSE)
+        relay(client, target)
+    except (OSError, ValueError):
+        pass
+    finally:
+        for connection in (target, client):
+            if connection is not None:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                connection.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-b", "--bind", default="127.0.0.1")
+    parser.add_argument("-p", "--port", type=int, default=700)
+    parser.add_argument("--password", default="")
+    args = parser.parse_args()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((args.bind, args.port))
+        server.listen(128)
+        print(f"YanTunnel websocket bridge listening on {args.bind}:{args.port}")
+        while True:
+            client, address = server.accept()
+            threading.Thread(
+                target=handle,
+                args=(client, address, args.password),
+                daemon=True,
+            ).start()
+
+
+if __name__ == "__main__":
+    main()
